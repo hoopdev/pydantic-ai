@@ -3,6 +3,7 @@ from __future__ import annotations as _annotations
 import json
 from collections.abc import Callable, Mapping
 from typing import Annotated, Any, Literal
+from unittest.mock import AsyncMock, patch
 
 import httpx2
 import pytest
@@ -19,6 +20,7 @@ from pydantic_ai.exceptions import (
     UnexpectedModelBehavior,
     UserError,
 )
+from pydantic_ai.messages import ImageUrl, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models import infer_model
 from pydantic_ai.models.decision import (
     ChoiceAnswer,
@@ -29,7 +31,7 @@ from pydantic_ai.models.decision import (
     ScoreQuestion,
 )
 from pydantic_ai.models.fallback import FallbackModel
-from pydantic_ai.models.system_one import SystemOneModel, SystemOneModelSettings
+from pydantic_ai.models.system_one import SystemOneImageModel, SystemOneModel, SystemOneModelSettings
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.profiles.decision import DecisionModelProfile, decision_model_profile
 from pydantic_ai.profiles.typesafe import typesafe_model_profile
@@ -519,6 +521,120 @@ async def test_decide_rejects_image_evidence_before_a_request(allow_model_reques
         )
 
     assert captured.requests == []
+
+
+@pytest.mark.parametrize('in_history', [False, True])
+async def test_image_model_sends_ordered_data_urls(allow_model_requests: None, in_history: bool):
+    """Pin the body, which cassette URL matching alone cannot protect, including a later text-only turn."""
+    captured = Captured(lambda request: answers(response={'type': 'noul', 'noul': 0.95}))
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(captured))
+    model = SystemOneImageModel('d1', provider=SystemOneProvider(base_url=BASE_URL, http_client=client))
+    agent = Agent(model, output_type=bool, instructions='Do these pictures show the same thing?')
+    first = BinaryContent(b'first', media_type='image/png')
+    second = BinaryContent(b'second', media_type='image/jpeg')
+    history = []
+    if in_history:
+        history = [
+            ModelRequest(parts=[UserPromptPart(['Earlier photo.', first])]),
+            ModelResponse(parts=[TextPart('Noted.')]),
+        ]
+    result = await agent.run(
+        ['Compare.', second] if in_history else ['Compare.', first, second], message_history=history
+    )
+
+    assert result.output is True
+    assert model.profile.get('supports_image_input') is True
+    assert captured.body['images'] == [first.data_uri, second.data_uri]
+    state = captured.body['state']
+    if in_history:
+        assert state == {
+            'history': [{'user': 'Earlier photo.\n\n<image 1>'}, {'assistant': 'Noted.'}],
+            'text': 'Compare.\n\n<image 2>',
+        }
+    else:
+        assert state == 'Compare.\n\n<image 1>\n\n<image 2>'
+    await agent.run('Text only.')
+    assert 'images' not in captured.body
+
+
+async def test_image_model_downloads_image_urls(allow_model_requests: None):
+    """The common mapper used by Jev resolves URLs; this adapter only serializes the resulting bytes."""
+    captured = Captured(lambda request: answers(response={'type': 'noul', 'noul': 0.95}))
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(captured))
+    model = SystemOneImageModel('d1', provider=SystemOneProvider(base_url=BASE_URL, http_client=client))
+    agent = Agent(model, output_type=bool, instructions='Is there a cat?')
+    image = ImageUrl('https://example.com/photo.png')
+    with patch(
+        'pydantic_ai.models.decision.download_item',
+        new_callable=AsyncMock,
+        return_value={'data': b'photo', 'data_type': 'image/png'},
+    ) as download:
+        await agent.run([image])
+    download.assert_awaited_once_with(image, data_format='bytes')
+    assert captured.body['images'] == ['data:image/png;base64,cGhvdG8=']
+    assert captured.body['state'] == '<image 1>'
+
+
+async def test_image_model_rejects_non_image_evidence(allow_model_requests: None):
+    """Direct `decide` calls bypass the common mapper's file-type checks."""
+    captured = Captured(ticket_answers)
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(captured))
+    model = SystemOneImageModel('d1', provider=SystemOneProvider(base_url=BASE_URL, http_client=client))
+    with pytest.raises(UserError, match=r'`request\.images` contains a non-image'):
+        await model.decide(
+            DecisionRequest(
+                state='Review.',
+                questions={'q': NoulQuestion()},
+                images=(BinaryContent(b'%PDF', media_type='application/pdf'),),
+            ),
+            {},
+        )
+    assert captured.requests == []
+
+
+async def test_image_model_blocks_private_image_urls(allow_model_requests: None):
+    """Image URL resolution retains the common downloader's SSRF guard before sending to the endpoint."""
+    captured = Captured(ticket_answers)
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(captured))
+    model = SystemOneImageModel('d1', provider=SystemOneProvider(base_url=BASE_URL, http_client=client))
+    agent = Agent(model, output_type=bool, instructions='Is this red?')
+    with pytest.raises(ValueError, match='Access to private/internal IP address'):
+        await agent.run([ImageUrl('http://127.0.0.1/photo.png')])
+    assert captured.requests == []
+
+
+async def test_image_model_direct_decide_and_body_override(allow_model_requests: None):
+    captured = Captured(lambda request: answers(q={'type': 'noul', 'noul': 0.95}))
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(captured))
+    model = SystemOneImageModel('d1', provider=SystemOneProvider(base_url=BASE_URL, http_client=client))
+    request = DecisionRequest(
+        state='Review <image 1>.',
+        questions={'q': NoulQuestion(instructions='Is it red?')},
+        images=(BinaryContent(b'photo', media_type='image/png'),),
+    )
+    await model.decide(request, {})
+    assert captured.body['images'] == ['data:image/png;base64,cGhvdG8=']
+    await model.decide(request, {'extra_body': {'images': ['data:image/png;base64,b3ZlcnJpZGU=']}})
+    assert captured.body['images'] == ['data:image/png;base64,b3ZlcnJpZGU=']
+
+
+async def test_image_model_error_preserves_images_for_fallback(allow_model_requests: None):
+    failed = Captured(lambda request: httpx2.Response(503, json={'error': 'unavailable'}))
+    succeeded = Captured(lambda request: answers(response={'type': 'noul', 'noul': 0.95}))
+    models = [
+        SystemOneImageModel(
+            'd1',
+            provider=SystemOneProvider(
+                base_url=BASE_URL, http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(captured))
+            ),
+        )
+        for captured in (failed, succeeded)
+    ]
+    agent = Agent(FallbackModel(*models), output_type=bool, instructions='Is this red?')
+    result = await agent.run(['Photo.', BinaryContent(b'photo', media_type='image/png')])
+    assert result.output is True
+    assert failed.body == succeeded.body
+    assert succeeded.body['images'] == ['data:image/png;base64,cGhvdG8=']
 
 
 async def test_http_error_with_a_text_body(allow_model_requests: None):

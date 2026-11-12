@@ -93,6 +93,12 @@ Canonical guidance: [realtime deployment](docs/realtime/deployment.md), [seeding
 
 ### URL fetching and provider file references
 
+`SystemOneImageModel` opts into sending prompt, tool-result and historical images
+to the configured System One endpoint as data URLs. Image URLs use the shared
+guarded downloader before serialization; the adapter does not ask the provider to
+fetch them. The original `SystemOneModel` remains text-only. The endpoint enforces
+image size and format limits, and image content remains untrusted model evidence.
+
 URLs can select resources reachable with the server's network access or a provider's credentials. Server-side request forgery (SSRF) review covers schemes, resolved addresses, redirects, alternate address forms, response size, and each transport that performs a fetch.
 
 Local downloads use `safe_download` for address, redirect, and response-size checks. Private addresses are blocked by default, and metadata addresses remain blocked when local URLs are enabled. `WebFetch()` uses provider-native fetching by default; its bundled local fallback uses the library's downloader, and a custom local tool has its own behavior.

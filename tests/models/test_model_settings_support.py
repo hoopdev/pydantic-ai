@@ -72,7 +72,7 @@ from pydantic_ai import UnsupportedSettingWarning, models
 from pydantic_ai.direct import model_request
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.models import Model, ModelRequestParameters
-from pydantic_ai.models.system_one import SystemOneModel
+from pydantic_ai.models.system_one import SystemOneImageModel, SystemOneModel
 from pydantic_ai.providers.system_one import SystemOneProvider
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
@@ -724,6 +724,10 @@ def _system_one(client: httpx2.AsyncClient) -> Model:
     )
 
 
+def _system_one_image(client: httpx2.AsyncClient) -> Model:
+    return SystemOneImageModel('d1', provider=SystemOneProvider(base_url='http://localhost:8700', http_client=client))
+
+
 def _openai_decisions(client: httpx2.AsyncClient) -> Model:
     return OpenAIDecisionsModel('gpt-6-luna', provider=OpenAIProvider(api_key=PROBE_KEY, http_client=client))
 
@@ -790,6 +794,7 @@ CASES = [
         DECISION_HOLDS_WITHOUT_SENDING,
     ),
     Case('SystemOneModel', ('System One',), decision_probe(_system_one), (), DECISION_HOLDS_WITHOUT_SENDING),
+    Case('SystemOneImageModel', ('System One',), decision_probe(_system_one_image), (), DECISION_HOLDS_WITHOUT_SENDING),
     Case(
         'OpenAIDecisionsModel',
         ('OpenAI Decisions',),
@@ -1143,6 +1148,7 @@ RETRY_CASES = [
         marks=_needs(typesafe_available, 'typesafe-sdk'),
     ),
     RetryCase('SystemOneModel', ('System One',), _system_one, (1, 1, 1), decision=True),
+    RetryCase('SystemOneImageModel', ('System One',), _system_one_image, (1, 1, 1), decision=True),
 ]
 """Every model reached over a mockable HTTP client.
 

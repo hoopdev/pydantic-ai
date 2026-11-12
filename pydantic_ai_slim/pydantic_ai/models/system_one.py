@@ -28,6 +28,7 @@ from .decision import (
 
 __all__ = (
     'SystemOneModel',
+    'SystemOneImageModel',
     'SystemOneModelName',
     'SystemOneModelSettings',
 )
@@ -127,7 +128,7 @@ class SystemOneModel(DecisionModel[httpx2.AsyncClient]):
 
     async def decide(self, request: DecisionRequest, model_settings: DecisionModelSettings) -> DecisionResponse:
         """Send one request to the `/v1/systemone` endpoint."""
-        if request.images:
+        if request.images and not self.supports_image_input:
             raise UserError('System One does not support image input.')
         body, questions = self._request_body(request, model_settings)
         http_request = self._build_request(body, model_settings)
@@ -208,6 +209,33 @@ class SystemOneModel(DecisionModel[httpx2.AsyncClient]):
         except (TypeError, ValueError) as e:
             # An `extra_body` that will not encode as JSON is the caller's to fix, not the model's.
             raise UserError(f'Could not send this request to the System One API: {e}') from e
+
+
+class SystemOneImageModel(SystemOneModel):
+    """A System One endpoint that accepts image data URLs in an `images` array.
+
+    Use this for an image-capable d1 endpoint implementing that wire format.
+    Unlike `SystemOneModel`, it sends images from prompts, tools and history to
+    the endpoint. Image URLs are downloaded by the shared decision mapper, and
+    images are sent in the order of their `<image N>` labels in the state.
+
+    This is an explicit transport choice: endpoints that require raw base64 or
+    TypeSafe's `assets` protocol are not compatible. Format, size and image-count
+    limits are enforced by the endpoint. `extra_body` can override body fields,
+    including `images`, as on `SystemOneModel`.
+    """
+
+    supports_image_input: ClassVar[bool] = True
+
+    def _request_body(
+        self, request: DecisionRequest, model_settings: DecisionModelSettings
+    ) -> tuple[dict[str, object], dict[str, DecisionQuestion]]:
+        if not all(image.is_image for image in request.images):
+            raise UserError('System One supports image evidence only; `request.images` contains a non-image.')
+        body, questions = super()._request_body(request, model_settings)
+        if request.images:
+            body.setdefault('images', [image.data_uri for image in request.images])
+        return body, questions
 
 
 @dataclass(kw_only=True)

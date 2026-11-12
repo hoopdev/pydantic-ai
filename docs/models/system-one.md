@@ -117,6 +117,44 @@ print(result.output)
 #> True
 ```
 
+## Image input
+
+For a d1 endpoint that accepts image data URLs in an `images` array, use
+[`SystemOneImageModel`][pydantic_ai.models.system_one.SystemOneImageModel]:
+
+```python {test="skip" gateway_toggle="skip"}
+from pathlib import Path
+
+from pydantic_ai import Agent, BinaryContent
+from pydantic_ai.models.system_one import SystemOneImageModel
+from pydantic_ai.providers.system_one import SystemOneProvider
+
+model = SystemOneImageModel(
+    'd1',
+    provider=SystemOneProvider(base_url='http://localhost:8080'),
+)
+agent = Agent(model, output_type=bool, instructions='Does this image contain explicit sexual content?')
+result = agent.run_sync([
+    'Judge the attached image.',
+    BinaryContent(Path('photo.jpg').read_bytes(), media_type='image/jpeg'),
+])
+print(result.output)
+```
+
+The shared decision-model mapper labels images as `<image 1>`, `<image 2>`, etc. in
+the state, including images in earlier turns and tool results. It downloads
+[`ImageUrl`][pydantic_ai.messages.ImageUrl] inputs through the existing guarded
+downloader. The adapter sends the resolved bytes as data URLs, in label order.
+Image format, size and count limits are left to the endpoint; a refusal is a
+[`ModelHTTPError`][pydantic_ai.exceptions.ModelHTTPError] that can trigger a fallback.
+Measure the decision quality and confidence thresholds on your own labelled images.
+
+Choose this class only for endpoints implementing that wire format. It is not the
+raw-base64 `images` format some servers use, or TypeSafe's `assets` protocol.
+The default `SystemOneModel` keeps its text-only behavior. Text-only requests on
+`SystemOneImageModel` omit `images`, and `extra_body` retains its normal override
+semantics, including for `images`.
+
 ## Model settings
 
 `temperature`, `timeout`, `extra_headers` and `extra_body` are forwarded to the request, and the other generic settings, such as `top_p`, are ignored. Whether `temperature` has an effect depends on the model: where it does, it moves every probability a [threshold](decision.md#confidence-and-thresholds) reads. [`SystemOneModelSettings`][pydantic_ai.models.system_one.SystemOneModelSettings] adds the two thresholds every decision model has, `decision_boolean_threshold` and `decision_route_threshold`.

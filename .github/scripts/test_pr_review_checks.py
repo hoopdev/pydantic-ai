@@ -66,6 +66,11 @@ def test_general_reviews_source_and_workflows() -> None:
     assert select(files) == {'general': [file.path for file in files]}
 
 
+def test_system_one_image_input_gets_url_fetch_review() -> None:
+    path = 'pydantic_ai_slim/pydantic_ai/models/system_one.py'
+    assert select([_file(path)]) == {'url-fetch': [path]}
+
+
 def test_specialist_owns_its_files_and_general_reviews_the_rest() -> None:
     """Each check sees only the files that selected it; the general check takes no owned file."""
     files = [

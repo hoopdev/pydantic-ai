@@ -21,6 +21,12 @@ print(result.output)
 
 Use `BinaryContent(...)` when the asset is already in memory instead of at a URL.
 
+For d1 behind a System One endpoint accepting image data URLs, use
+`SystemOneImageModel` from `pydantic_ai.models.system_one`. It reuses the decision
+mapper's image labels and URL resolution, sending images in an ordered `images`
+array. The default `SystemOneModel` is text-only; TypeSafe/Jev's `assets` protocol
+is separate. See [System One image input](https://pydantic.dev/docs/ai/models/system-one/#image-input).
+
 Not every model supports every input type, but the agent isn't limited to what its model reads natively. Add the `FileUnderstanding` capability to have another model describe each file the agent's model can't take, judged by the model's profile; the agent's model gets the description in the file's place, and files it reads are sent as they are:
 
 ```python
